@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solicitar Entrega</title>
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #map {
+            flex: 1;
+        }
+
+        .form-container {
+            padding: 20px;
+            background-color: #f5f5f5;
+            box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        input,
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: #007bff;
+            border: none;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .suggestions {
+            position: absolute;
+            background-color: white;
+            border: 1px solid #ddd;
+            z-index: 1000;
+            width: 100%;
+        }
+
+        .suggestion-item {
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        .suggestion-item:hover {
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div class="form-container">
+        <input type="text" id="pickupLocation" placeholder="Local de Retirada">
+        <div id="pickupSuggestions" class="suggestions"></div>
+        <input type="text" id="deliveryLocation" placeholder="Local de Entrega">
+        <div id="deliverySuggestions" class="suggestions"></div>
+        <input type="date" id="travelDate" placeholder="Data da Viagem">
+        <input type="time" id="travelTime" placeholder="Horário da Viagem">
+        <button id="requestDelivery">Solicitar Entrega</button>
+    </div>
+    <script type="module">
+        // Importar as bibliotecas do Firebase
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+        import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+        // Configurações do Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyAETu5Pp41toGbjwMyRNFV_Riu_lWHHDZE",
+            authDomain: "mobilidadeurbana-6774a.firebaseapp.com",
+            projectId: "mobilidadeurbana-6774a",
+            storageBucket: "mobilidadeurbana-6774a.appspot.com",
+            messagingSenderId: "324479955388",
+            appId: "1:324479955388:web:ba792d90156c14e6fb3bb9",
+            measurementId: "G-Y99BNDEB0M"
+        };
+
+        // Inicializar o Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let map;
+        let pickupMarker;
+        let deliveryMarker;
+        let directionsService;
+        let directionsRenderer
+
+        async function initMap() {
+            // Importar Marcadores Avançados
+            const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: -23.55052, lng: -46.633308 }, // Centro de São Paulo
+                zoom: 12,
+                mapId: 'DEMO_MAP_ID' // Substitua 'SEU_MAP_ID' pelo ID do seu mapa
+            });
+
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer();
+            directionsRenderer.setMap(map);
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    const userLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    map.setCenter(userLocation);
+                    new AdvancedMarkerElement({
+                        position: userLocation,
+                        map: map,
+                        title: 'Sua localização'
+                    });
+                }, () => {
+                    handleLocationError(true, map.getCenter());
+                });
+            } else {
+                handleLocationError(false, map.getCenter());
+            }
+
+            map.addListener('click', (e) => {
+                placeMarker(e.latLng);
+            });
+        }
+
+        function handleLocationError(browserHasGeolocation, pos) {
+            const infoWindow = new google.maps.InfoWindow({
+                content: browserHasGeolocation ?
+                    'Erro: Falha ao tentar buscar a localização.' :
+                    'Erro: Seu navegador não suporta Geolocation.',
+                position: pos
+            });
+            infoWindow.open(map);
+        }
+
+        let pickupCoords = null;
+        let deliveryCoords = null;
+
+        function placeMarker(location) {
+            const { AdvancedMarkerElement } = google.maps.marker;
+
+            if (!pickupMarker) {
+                pickupMarker = new AdvancedMarkerElement({
+                    position: location,
+                    map: map,
+                    title: 'Local de Retirada'
+                });
+                pickupCoords = location;  // Armazenar coordenadas
+                document.getElementById('pickupLocation').value = `${location.lat()}, ${location.lng()}`;
+                convertCoordinatesToAddress(location, 'pickup');
+            } else if (!deliveryMarker) {
+                deliveryMarker = new AdvancedMarkerElement({
+                    position: location,
+                    map: map,
+                    title: 'Local de Entrega'
+                });
+                deliveryCoords = location;  // Armazenar coordenadas
+                document.getElementById('deliveryLocation').value = `${location.lat()}, ${location.lng()}`;
+                convertCoordinatesToAddress(location, 'delivery');
+
+                if (pickupCoords && deliveryCoords) {
+                    drawRoute(pickupCoords, deliveryCoords);
+                }
+            }
+        }
+
+        function drawRoute(start, end) {
+            const request = {
+                origin: start,
+                destination: end,
+                travelMode: 'DRIVING'
+            };
+
+            directionsService.route(request, (result, status) => {
+                if (status === 'OK') {
+                    directionsRenderer.setDirections(result);
+                } else {
+                    console.error('Erro ao traçar a rota:', status);
+                }
+            });
+        }
+
+        async function convertCoordinatesToAddress(location, type) {
+            const geocoder = new google.maps.Geocoder();
+            const latLng = new google.maps.LatLng(location.lat(), location.lng());
+
+            try {
+                const results = await geocoder.geocode({ location: latLng });
+                if (results.results[0]) {
+                    const address = results.results[0].formatted_address;
+                    if (type === 'pickup') {
+                        document.getElementById('pickupLocation').value = address;
+                    } else {
+                        document.getElementById('deliveryLocation').value = address;
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao converter coordenadas para endereço:', error);
+            }
+        }
+
+        async function updateSuggestions(inputElement, suggestionsElement, type) {
+            const query = inputElement.value;
+            if (query.length < 3) {
+                suggestionsElement.innerHTML = '';
+                return;
+            }
+
+            const service = new google.maps.places.AutocompleteService();
+            service.getPlacePredictions({ input: query }, (predictions, status) => {
+                if (status === google.maps.places.PlacesServiceStatus.OK && predictions) {
+                    suggestionsElement.innerHTML = predictions.map(prediction => `
+                <div class="suggestion-item" data-place-id="${prediction.place_id}">
+                    ${prediction.description}
+                </div>
+            `).join('');
+
+                    const items = suggestionsElement.getElementsByClassName('suggestion-item');
+                    for (const item of items) {
+                        item.addEventListener('click', async () => {
+                            inputElement.value = item.innerText;
+                            suggestionsElement.innerHTML = '';
+
+                            const placeId = item.getAttribute('data-place-id');
+                            const place = await getPlaceDetails(placeId);
+
+                            if (type === 'pickup') {
+                                if (pickupMarker) {
+                                    pickupMarker.setMap(null);
+                                }
+                                pickupMarker = new google.maps.marker.AdvancedMarkerElement({
+                                    position: place.geometry.location,
+                                    map: map,
+                                    title: 'Local de Retirada'
+                                });
+                                pickupCoords = place.geometry.location;
+                            } else {
+                                if (deliveryMarker) {
+                                    deliveryMarker.setMap(null);
+                                }
+                                deliveryMarker = new google.maps.marker.AdvancedMarkerElement({
+                                    position: place.geometry.location,
+                                    map: map,
+                                    title: 'Local de Entrega'
+                                });
+                                deliveryCoords = place.geometry.location;
+                            }
+
+                            map.setCenter(place.geometry.location);
+
+                            if (pickupCoords && deliveryCoords) {
+                                drawRoute(pickupCoords, deliveryCoords);
+                            }
+                        });
+                    }
+                } else {
+                    suggestionsElement.innerHTML = '';
+                }
+            });
+        }
+
+        async function getPlaceDetails(placeId) {
+            return new Promise((resolve, reject) => {
+                const service = new google.maps.places.PlacesService(map);
+                service.getDetails({ placeId }, (place, status) => {
+                    if (status === google.maps.places.PlacesServiceStatus.OK) {
+                        resolve(place);
+                    } else {
+                        reject(status);
+                    }
+                });
+            });
+        }
+
+        document.getElementById('pickupLocation').addEventListener('input', (event) => {
+            updateSuggestions(event.target, document.getElementById('pickupSuggestions'), 'pickup');
+        });
+
+        document.getElementById('deliveryLocation').addEventListener('input', (event) => {
+            updateSuggestions(event.target, document.getElementById('deliverySuggestions'), 'delivery');
+        });
+
+        document.getElementById('requestDelivery').addEventListener('click', async () => {
+            const pickupLocation = document.getElementById('pickupLocation').value;
+            const deliveryLocation = document.getElementById('deliveryLocation').value;
+            const travelDate = document.getElementById('travelDate').value;
+            const travelTime = document.getElementById('travelTime').value;
+
+            if (!pickupLocation || !deliveryLocation || !travelDate || !travelTime) {
+                alert('Por favor, selecione os locais de retirada e entrega no mapa.');
+                return;
+            }
+
+            const user = auth.currentUser;
+            if (!user) {
+                alert('Por favor, faça login para solicitar uma entrega.');
+                window.location.href = 'LoginOrRegister.html';
+                return;
+            }
+
+            try {
+                const docRef = await addDoc(collection(db, 'deliveries'), {
+                    userId: user.uid,
+                    pickupLocation,
+                    deliveryLocation,
+                    travelDate,
+                    travelTime,
+                    status: 'pending',
+                    createdAt: new Date()
+                });
+                alert('Entrega solicitada com sucesso!');
+                if (pickupMarker) {
+                    pickupMarker.setMap(null);
+                }
+                if (deliveryMarker) {
+                    deliveryMarker.setMap(null);
+                }
+                pickupMarker = null;
+                deliveryMarker = null;
+                document.getElementById('pickupLocation').value = '';
+                document.getElementById('deliveryLocation').value = '';
+                document.getElementById('travelDate').value = '';
+                document.getElementById('travelTime').value = '';
+            } catch (error) {
+                console.error('Erro ao solicitar a entrega:', error);
+                alert('Erro ao solicitar a entrega. Tente novamente.');
+            }
+        });
+
+        window.onload = initMap;
+    </script>
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQfludjYrwSB-dVU44nFlh_NyzoQwn_8I&loading=async&libraries=places"
+        async defer></script>
+</body>
+
+</html>
