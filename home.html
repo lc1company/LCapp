@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <title>Solicitar Entrega</title>
     <style>
         body {
@@ -63,6 +64,57 @@
         .suggestion-item:hover {
             background-color: #f0f0f0;
         }
+
+        .route-info {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #fff;
+            padding: 20px 15px;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.15);
+            border-top-left-radius: 15px;
+            border-top-right-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            z-index: 1000;
+        }
+
+        .info-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .info-item i {
+            font-size: 22px;
+            color: #007bff;
+            margin-right: 10px;
+        }
+
+        #requestDelivery {
+            width: 100%;
+            padding: 12px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        #requestDelivery:hover {
+            background-color: #218838;
+        }
+
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 
@@ -73,10 +125,20 @@
         <div id="pickupSuggestions" class="suggestions"></div>
         <input type="text" id="deliveryLocation" placeholder="Local de Entrega">
         <div id="deliverySuggestions" class="suggestions"></div>
-        <input type="date" id="travelDate" placeholder="Data da Viagem">
-        <input type="time" id="travelTime" placeholder="Horário da Viagem">
+    </div>
+
+    <div id="routeInfo" class="route-info hidden">
+        <div class="info-item">
+            <i class="fas fa-map-marker-alt"></i>
+            <span id="distanceText"></span>
+        </div>
+        <div class="info-item">
+            <i class="fas fa-money-bill-wave"></i>
+            <span id="priceText"></span>
+        </div>
         <button id="requestDelivery">Solicitar Entrega</button>
     </div>
+
     <script type="module">
         // Importar as bibliotecas do Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
@@ -194,6 +256,18 @@
             directionsService.route(request, (result, status) => {
                 if (status === 'OK') {
                     directionsRenderer.setDirections(result);
+
+                    const route = result.routes[0];
+                    const distanceInMeters = route.legs[0].distance.value;
+                    const distanceInKilometers = distanceInMeters / 1000;
+
+                    const tarifaPorKm = 2.0; // 2 reais por quilômetro
+                    const valorTotal = distanceInKilometers * tarifaPorKm;
+
+                    document.getElementById('distanceText').textContent = `${distanceInKilometers.toFixed(2)} km`;
+                    document.getElementById('priceText').textContent = `R$ ${valorTotal.toFixed(2)}`;
+
+                    document.getElementById('routeInfo').classList.remove('hidden');
                 } else {
                     console.error('Erro ao traçar a rota:', status);
                 }
@@ -303,11 +377,10 @@
         document.getElementById('requestDelivery').addEventListener('click', async () => {
             const pickupLocation = document.getElementById('pickupLocation').value;
             const deliveryLocation = document.getElementById('deliveryLocation').value;
-            const travelDate = document.getElementById('travelDate').value;
-            const travelTime = document.getElementById('travelTime').value;
 
-            if (!pickupLocation || !deliveryLocation || !travelDate || !travelTime) {
-                alert('Por favor, selecione os locais de retirada e entrega no mapa.');
+            // Verificar se as coordenadas foram definidas
+            if (!pickupCoords || !deliveryCoords) {
+                alert('Por favor, selecione os locais de retirada e entrega no mapa ou escolha uma sugestão.');
                 return;
             }
 
@@ -323,29 +396,33 @@
                     userId: user.uid,
                     pickupLocation,
                     deliveryLocation,
-                    travelDate,
-                    travelTime,
+                    pickupCoords: { lat: pickupCoords.lat(), lng: pickupCoords.lng() }, // Salvando coordenadas
+                    deliveryCoords: { lat: deliveryCoords.lat(), lng: deliveryCoords.lng() }, // Salvando coordenadas
                     status: 'pending',
                     createdAt: new Date()
                 });
                 alert('Entrega solicitada com sucesso!');
-                if (pickupMarker) {
-                    pickupMarker.setMap(null);
-                }
-                if (deliveryMarker) {
-                    deliveryMarker.setMap(null);
-                }
-                pickupMarker = null;
-                deliveryMarker = null;
-                document.getElementById('pickupLocation').value = '';
-                document.getElementById('deliveryLocation').value = '';
-                document.getElementById('travelDate').value = '';
-                document.getElementById('travelTime').value = '';
+                resetForm();
             } catch (error) {
                 console.error('Erro ao solicitar a entrega:', error);
                 alert('Erro ao solicitar a entrega. Tente novamente.');
             }
         });
+
+        function resetForm() {
+            if (pickupMarker) {
+                pickupMarker.setMap(null);
+            }
+            if (deliveryMarker) {
+                deliveryMarker.setMap(null);
+            }
+            pickupMarker = null;
+            deliveryMarker = null;
+            pickupCoords = null;
+            deliveryCoords = null;
+            document.getElementById('pickupLocation').value = '';
+            document.getElementById('deliveryLocation').value = '';
+        }
 
         window.onload = initMap;
     </script>
