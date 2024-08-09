@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel do Entregador</title>
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #e9ecef;
+            overflow-x: hidden;
+        }
+
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+
+        .form-container {
+            padding: 20px;
+            background-color: #fff;
+            box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.1);
+            border-radius: 15px 15px 0 0;
+            position: relative;
+            z-index: 1000;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button#online {
+            background-color: #28a745;
+            color: white;
+        }
+
+        button#online:hover {
+            background-color: #218838;
+        }
+
+        button#offline {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        button#offline:hover {
+            background-color: #c82333;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .message {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 20px;
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            border-radius: 5px;
+            text-align: center;
+            z-index: 1000;
+        }
+
+        .message a {
+            color: #004085;
+            text-decoration: underline;
+        }
+
+        .message a:hover {
+            text-decoration: none;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+
+    <div class="form-container">
+        <button id="statusButton" class="hidden">Ficar Online</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+        import { getFirestore, updateDoc, doc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAETu5Pp41toGbjwMyRNFV_Riu_lWHHDZE",
+            authDomain: "mobilidadeurbana-6774a.firebaseapp.com",
+            projectId: "mobilidadeurbana-6774a",
+            storageBucket: "mobilidadeurbana-6774a.appspot.com",
+            messagingSenderId: "324479955388",
+            appId: "1:324479955388:web:ba792d90156c14e6fb3bb9",
+            measurementId: "G-Y99BNDEB0M"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let map;
+        let marker;
+        let locationCircle
+        let onlineStatus = false;
+        let routesListener = null;
+        let currentLocation = { lat: null, lng: null }; // Variável global para armazenar a localização
+
+        async function initMap() {
+            const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: -23.55052, lng: -46.633308 },
+                zoom: 16,
+                mapId: 'DEMO_MAP_ID'
+            });
+
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition((position) => {
+                    const userLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    map.setCenter(userLocation);
+
+                    if (!locationCircle) {
+                        locationCircle = new google.maps.Circle({
+                            strokeColor: "#FF0000",
+                            strokeOpacity: 0.8,
+                            strokeWeight: 2,
+                            fillColor: "#FF0000",
+                            fillOpacity: 0.35,
+                            map: map,
+                            center: userLocation,
+                            radius: 10 // Raio da bolinha em metros
+                        });
+                    } else {
+                        locationCircle.setCenter(userLocation);
+                    }
+                }, () => {
+                    handleLocationError(true, map.getCenter());
+                }, {
+                    enableHighAccuracy: true,
+                    maximumAge: 30000,
+                    timeout: 27000
+                });
+            } else {
+                handleLocationError(false, map.getCenter());
+            }
+        }
+
+        function handleLocationError(browserHasGeolocation, pos) {
+            const infoWindow = new google.maps.InfoWindow({
+                content: browserHasGeolocation ?
+                    'Erro: Falha ao tentar buscar a localização.' :
+                    'Erro: Seu navegador não suporta Geolocation.',
+                position: pos
+            });
+            infoWindow.open(map);
+        }
+
+        async function checkUserRole() {
+            onAuthStateChanged(auth, async (user) => {
+                // Ocultar o botão inicialmente
+                document.getElementById('statusButton').classList.add('hidden');
+
+                if (!user) {
+                    // Usuário não está autenticado, redirecione para a página de login
+                    window.location.href = 'LoginOrRegisterDrivers.html';
+                    return;
+                }
+
+                const docRef = doc(db, 'users', user.uid);
+                try {
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.role === 'deliverer') {
+                            if (!data.banned) {
+                                // Exibir o botão se o usuário for entregador e não estiver banido
+                                document.querySelector('.form-container').classList.remove('hidden');
+                                document.getElementById('statusButton').classList.remove('hidden');
+                                updateButtonStatus(data.online);
+                            } else {
+                                showBannedMessage();
+                            }
+                        } else {
+                            showNotDelivererMessage();
+                        }
+                    } else {
+                        console.error('Documento não encontrado.');
+                        alert('Erro ao verificar papel do usuário. Documento não encontrado.');
+                    }
+                } catch (error) {
+                    console.error('Erro ao verificar papel do usuário:', error);
+                    alert('Erro ao verificar papel do usuário. Tente novamente.');
+                }
+            });
+        }
+
+        function updateButtonStatus(isOnline) {
+            const statusButton = document.getElementById('statusButton');
+            if (isOnline) {
+                statusButton.textContent = 'Ficar Offline';
+                statusButton.classList.add('online');
+                statusButton.classList.remove('offline');
+            } else {
+                statusButton.textContent = 'Ficar Online';
+                statusButton.classList.add('offline');
+                statusButton.classList.remove('online');
+            }
+        }
+
+        function showBannedMessage() {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message');
+            messageDiv.innerHTML = `<p>Você foi banido e não pode acessar esta funcionalidade.</p><a href="support.html">Entre em contato com o suporte</a>`;
+            document.body.appendChild(messageDiv);
+        }
+
+        function showNotDelivererMessage() {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message');
+            messageDiv.innerHTML = `<p>Você não é um motorista parceiro. Para se tornar um, <a href="registerAsDriver.html">clique aqui</a>.</p>`;
+            document.body.appendChild(messageDiv);
+        }
+
+        async function startListeningForRoutes() {
+            if (!onlineStatus) return;
+
+            const user = auth.currentUser;
+            if (!user) return;
+
+            const docRef = doc(db, 'users', user.uid);
+
+            // Usamos currentLocation para obter a localização atual do entregador
+            const currentLocation = locationCircle ? locationCircle.getCenter() : { lat: null, lng: null };
+
+            if (!currentLocation.lat || !currentLocation.lng) {
+                console.error('Localização atual do entregador não encontrada.');
+                return;
+            }
+
+            routesListener = onSnapshot(collection(db, 'deliveries'), async (snapshot) => {
+                const routes = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (data.status === 'pending') {
+                        // Calcula a distância entre o ponto de pickup e a localização atual do entregador
+                        const distance = calculateDistance(currentLocation.lat, currentLocation.lng, data.pickupLocation.lat, data.pickupLocation.lng);
+                        // Defina um limite de distância, por exemplo, 5 km
+                        if (distance <= 5) {
+                            routes.push(data);
+                        }
+                    }
+                });
+
+                if (routes.length > 0) {
+                    console.log('Rotas disponíveis próximas:', routes);
+                    // Aqui você pode adicionar a lógica para desenhar as rotas no mapa
+                } else {
+                    console.log('Nenhuma rota pendente encontrada próxima.');
+                }
+            });
+        }
+
+        function stopListeningForRoutes() {
+            if (routesListener) {
+                routesListener();
+                routesListener = null;
+            }
+        }
+
+        // Função para calcular a distância entre duas coordenadas em quilômetros
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371; // Raio da Terra em quilômetros
+            const dLat = (lat2 - lat1) * (Math.PI / 180);
+            const dLng = (lng2 - lng1) * (Math.PI / 180);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c; // Distância em quilômetros
+        }
+
+        async function setOnlineStatus() {
+            const user = auth.currentUser;
+            if (!user) {
+                alert('Por favor, faça login para alterar seu status.');
+                window.location.href = 'LoginOrRegister.html';
+                return;
+            }
+
+            const docRef = doc(db, 'users', user.uid);
+            try {
+                // Verifica se o documento existe
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const isOnline = !docSnap.data().online;
+                    // Atualiza apenas o campo online
+                    await updateDoc(docRef, { online: isOnline });
+                    updateButtonStatus(isOnline);
+
+                    if (isOnline) {
+                        startListeningForRoutes();
+                    } else {
+                        stopListeningForRoutes();
+                    }
+                } else {
+                    console.error('Documento não encontrado.');
+                    alert('Erro ao atualizar status. Documento não encontrado.');
+                    return;
+                }
+            } catch (error) {
+                console.error('Erro ao atualizar status:', error);
+                alert('Erro ao atualizar status. Tente novamente.');
+            }
+        }
+
+        document.getElementById('statusButton').addEventListener('click', () => {
+            setOnlineStatus();
+        });
+
+        window.onload = async function () {
+            await initMap();
+            await checkUserRole();
+        }
+
+    </script>
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQfludjYrwSB-dVU44nFlh_NyzoQwn_8I&loading=async&libraries=places"
+        async defer></script>
+</body>
+
+</html>
