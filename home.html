@@ -14,46 +14,73 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
+            background-color: #e9ecef;
+            overflow-x: hidden;
         }
 
         #map {
             flex: 1;
+            width: 100%;
         }
 
         .form-container {
             padding: 20px;
-            background-color: #f5f5f5;
+            background-color: #fff;
             box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.1);
+            border-radius: 15px 15px 0 0;
+            position: relative;
+            z-index: 1000;
         }
 
-        input,
-        button {
+        input {
             width: 100%;
-            padding: 10px;
+            padding: 12px;
             margin-bottom: 10px;
             border: 1px solid #ccc;
             border-radius: 8px;
-            box-sizing: border-box;
             font-size: 16px;
+            box-sizing: border-box;
         }
 
         button {
-            background-color: #007bff;
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
             border: none;
-            color: #fff;
+            border-radius: 8px;
+            font-size: 18px;
             cursor: pointer;
+            transition: background-color 0.3s ease;
         }
 
-        button:hover {
+        button#requestDelivery {
+            background-color: #007bff;
+            color: white;
+        }
+
+        button#requestDelivery:hover {
             background-color: #0056b3;
+        }
+
+        button#cancelDelivery {
+            background-color: #ff0404;
+            color: white;
+        }
+
+        button#cancelDelivery:hover {
+            background-color: #cc1919;
         }
 
         .suggestions {
             position: absolute;
             background-color: white;
             border: 1px solid #ddd;
-            z-index: 1000;
+            z-index: 1001;
             width: 100%;
+            max-height: 200px;
+            overflow-y: auto;
+            border-radius: 0 0 8px 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
         }
 
         .suggestion-item {
@@ -71,14 +98,13 @@
             left: 0;
             right: 0;
             background-color: #fff;
-            padding: 20px 15px;
+            padding: 20px;
             box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.15);
             border-top-left-radius: 15px;
             border-top-right-radius: 15px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            font-family: Arial, sans-serif;
             z-index: 1000;
         }
 
@@ -94,22 +120,6 @@
             font-size: 22px;
             color: #007bff;
             margin-right: 10px;
-        }
-
-        #requestDelivery {
-            width: 100%;
-            padding: 12px;
-            background-color: #28a745;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 18px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-
-        #requestDelivery:hover {
-            background-color: #218838;
         }
 
         .hidden {
@@ -137,6 +147,7 @@
             <span id="priceText"></span>
         </div>
         <button id="requestDelivery">Solicitar Entrega</button>
+        <button id="cancelDelivery">Cancelar</button>
     </div>
 
     <script type="module">
@@ -173,7 +184,7 @@
 
             map = new google.maps.Map(document.getElementById('map'), {
                 center: { lat: -23.55052, lng: -46.633308 }, // Centro de São Paulo
-                zoom: 12,
+                zoom: 16,
                 mapId: 'DEMO_MAP_ID' // Substitua 'SEU_MAP_ID' pelo ID do seu mapa
             });
 
@@ -262,7 +273,15 @@
                     const distanceInKilometers = distanceInMeters / 1000;
 
                     const tarifaPorKm = 2.0; // 2 reais por quilômetro
-                    const valorTotal = distanceInKilometers * tarifaPorKm;
+                    const valorMinimo = 5.0; // Valor mínimo de R$ 5,00
+
+                    // Calcular o valor total com base na distância
+                    let valorTotal = distanceInKilometers * tarifaPorKm;
+
+                    // Aplicar o valor mínimo para distâncias abaixo de 2 km
+                    if (distanceInKilometers < 2) {
+                        valorTotal = valorMinimo;
+                    }
 
                     document.getElementById('distanceText').textContent = `${distanceInKilometers.toFixed(2)} km`;
                     document.getElementById('priceText').textContent = `R$ ${valorTotal.toFixed(2)}`;
@@ -271,6 +290,36 @@
                 } else {
                     console.error('Erro ao traçar a rota:', status);
                 }
+            });
+
+            // Event Listener para cancelar a entrega
+            document.getElementById('cancelDelivery').addEventListener('click', () => {
+                directionsRenderer.set('directions', null); // Limpar a rota exibida
+                document.getElementById('routeInfo').classList.add('hidden'); // Esconder as informações da rota
+                document.getElementById('distanceText').textContent = ''; // Limpar o texto de distância
+                document.getElementById('priceText').textContent = ''; // Limpar o texto de preço
+
+                // Remover as sugestões de endereço
+                document.getElementById('pickupSuggestions').innerHTML = '';
+                document.getElementById('deliverySuggestions').innerHTML = '';
+
+                // Remover os marcadores de pickup e delivery do mapa
+                if (pickupMarker) {
+                    pickupMarker.setMap(null);
+                    pickupMarker = null;
+                }
+                if (deliveryMarker) {
+                    deliveryMarker.setMap(null);
+                    deliveryMarker = null;
+                }
+
+                // Limpar as coordenadas armazenadas
+                pickupCoords = null;
+                deliveryCoords = null;
+
+                // Limpar os campos de entrada de local
+                document.getElementById('pickupLocation').value = '';
+                document.getElementById('deliveryLocation').value = '';
             });
         }
 
